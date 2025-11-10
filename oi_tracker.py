@@ -91,29 +91,26 @@ def get_security_id(dhan_obj: dhanhq, underlying_sym: str):
         The security ID as a string, or None if not found.
     """
     instruments = dhan_obj.fetch_security_list()
+    symbol = underlying_sym.split(" ")[0].upper()
     for index, row in instruments.iterrows():
-        if row['SEM_INSTRUMENT_NAME'] == underlying_sym and row['SEM_EXCH_SEGMENT'] == 'IDX_I':
+        if row['SEM_INSTRUMENT_NAME'] == 'INDEX' and row['SEM_TRADING_SYMBOL'] == symbol:
             return str(row['SEM_SECURITY_ID'])
     return None
 
-def get_atm_strike(dhan_obj: dhanhq, underlying_sym: str, exch_for_ltp: str, strike_diff: int):
+def get_atm_strike(dhan_obj: dhanhq, security_id: str, exch_for_ltp: str, strike_diff: int):
     """
     Fetches the Last Traded Price (LTP) for the underlying symbol and calculates
     the At-The-Money (ATM) strike.
     Args:
         dhan_obj: Initialized dhanhq object.
-        underlying_sym: The underlying symbol (e.g., "NIFTY 50").
+        security_id: The security ID of the underlying instrument.
         exch_for_ltp: The exchange to fetch LTP from (e.g., "NSE").
         strike_diff: The difference between consecutive option strikes.
     Returns:
         The calculated ATM strike as a float, or None if LTP cannot be fetched or an error occurs.
     """
     try:
-        underlying_security_id = get_security_id(dhan_obj, underlying_sym)
-        if not underlying_security_id:
-            logging.error(f"Could not find security ID for {underlying_sym}.")
-            return None
-        ltp_data = dhan_obj.get_quotes(underlying_security_id)
+        ltp_data = dhan_obj.get_quotes(security_id)
 
         if not ltp_data or 'data' not in ltp_data or 'ltp' not in ltp_data['data']:
             logging.error(f"LTP data not found or incomplete for {underlying_sym}. Response: {ltp_data}")
@@ -127,26 +124,21 @@ def get_atm_strike(dhan_obj: dhanhq, underlying_sym: str, exch_for_ltp: str, str
     except Exception as e:
         logging.error(f"Error in get_atm_strike for {underlying_sym}: {e}", exc_info=True)
         return None
-def get_nearest_weekly_expiry(dhan_obj: dhanhq, underlying_prefix_str: str):
+def get_nearest_weekly_expiry(dhan_obj: dhanhq, security_id: str):
     """
-    Finds the nearest future weekly expiry date for the given underlying symbol prefix
-    from a list of instruments.
+    Finds the nearest future weekly expiry date for the given underlying security ID.
     Args:
         dhan_obj: Initialized dhanhq object.
-        underlying_prefix_str: The prefix of the underlying symbol (e.g., "NIFTY").
+        security_id: The security ID of the underlying instrument.
     Returns:
         The nearest weekly expiry date as a datetime.date object, or None if no suitable expiry is found.
     """
     today = date.today()
     possible_expiries = set()
-    logging.info(f"Searching for nearest weekly expiry for {underlying_prefix_str}.")
+    logging.info(f"Searching for nearest weekly expiry for security ID: {security_id}.")
 
-    underlying_security_id = get_security_id(dhan_obj, underlying_prefix_str)
-    if not underlying_security_id:
-        logging.error(f"Could not find security ID for {underlying_prefix_str}.")
-        return None
     expiry_data = dhan_obj.expiry_list(
-        under_security_id=underlying_security_id,
+        under_security_id=security_id,
         under_exchange_segment="IDX_I"
     )
 
@@ -167,17 +159,17 @@ def get_nearest_weekly_expiry(dhan_obj: dhanhq, underlying_prefix_str: str):
     nearest_expiry = sorted(list(possible_expiries))[0]
     logging.info(f"Nearest weekly expiry for {underlying_prefix_str}: {nearest_expiry}")
     return {"expiry": nearest_expiry, "symbol_prefix": "NIFTY"} # symbol_prefix is not available from this API call.
-def get_relevant_option_details(dhan_obj: dhanhq, atm_strike_val: float, expiry_dt: date, strike_diff_val: int, opt_count: int, underlying_prefix_str: str, symbol_prefix: str):
+def get_relevant_option_details(dhan_obj: dhanhq, security_id: str, atm_strike_val: float, expiry_dt: date, strike_diff_val: int, opt_count: int):
     """
     Identifies relevant ITM, ATM, and OTM Call/Put option contract details
     (tradingsymbol, instrument_token, strike) for a given ATM strike and expiry date.
     Args:
         dhan_obj: Initialized dhanhq object.
+        security_id: The security ID of the underlying instrument.
         atm_strike_val: The current At-The-Money strike.
         expiry_dt: The expiry date for the options.
         strike_diff_val: The difference between option strikes.
         opt_count: Number of ITM/OTM strikes to fetch on each side of ATM.
-        underlying_prefix_str: The prefix of the underlying (e.g., "NIFTY").
     Returns:
         A dictionary where keys are like "atm_ce", "itm1_pe", etc., and values are
         dictionaries containing 'tradingsymbol', 'instrument_token', and 'strike'.
@@ -188,14 +180,10 @@ def get_relevant_option_details(dhan_obj: dhanhq, atm_strike_val: float, expiry_
         logging.error("Expiry date or ATM strike is None, cannot fetch option details.")
         return relevant_options
 
-    underlying_security_id = get_security_id(dhan_obj, underlying_prefix_str)
-    if not underlying_security_id:
-        logging.error(f"Could not find security ID for {underlying_prefix_str}.")
-        return relevant_options
-    option_chain_data = dhan_obj.get_option_chain(underlying_security_id, expiry_dt.strftime("%Y-%m-%d"))
+    option_chain_data = dhan_obj.get_option_chain(security_id, expiry_dt.strftime("%Y-%m-%d"))
 
     if not option_chain_data or 'data' not in option_chain_data or not option_chain_data['data']:
-        logging.error(f"No option chain data found for {underlying_prefix_str} on {expiry_dt}.")
+        logging.error(f"No option chain data found for security ID {security_id} on {expiry_dt}.")
         return relevant_options
 
     for i in range(-opt_count, opt_count + 1):
@@ -476,7 +464,7 @@ def generate_options_tables(oi_report: dict, contract_details: dict, current_atm
     if (float(total_put_threshold_breached)/float(total_put_cells) > 0.5) or (float(total_call_threshold_breached)/float(total_call_cells) > 0.5):
         os.system('afplay /Users/vibhu/zd/siren-alert-96052.mp3')
     return Group(call_table, put_table)  # Group tables for simultaneous display in Live
-def run_analysis_iteration(dhan_conn: dhanhq, nearest_exp_date: date, symbol_prefix: str):
+def run_analysis_iteration(dhan_conn: dhanhq, underlying_security_id: str, nearest_exp_date: date):
     """
     Performs one complete iteration of fetching data, calculating differences, and generating tables.
     This function is called repeatedly by the live update loop.
@@ -502,7 +490,7 @@ def run_analysis_iteration(dhan_conn: dhanhq, nearest_exp_date: date, symbol_pre
         # 2. Identify relevant option contracts around the new ATM strike
         option_contract_details = get_relevant_option_details(
             dhan_conn, current_atm_strike, nearest_exp_date,
-            STRIKE_DIFFERENCE, OPTIONS_COUNT, UNDERLYING_PREFIX, symbol_prefix
+            STRIKE_DIFFERENCE, OPTIONS_COUNT
         )
 
         # If no contracts are found (e.g., due to market close or issues with instrument list for that ATM)
@@ -543,16 +531,24 @@ def main():
         # 1. Verify Connection
         dhan.get_positions()
         console.print("[bold green]DhanHQ API connection verified successfully![/bold green]")
-        # 2. Determine nearest weekly expiry (done once at startup)
+
+        # 2. Get Security ID for the underlying symbol
+        underlying_security_id = get_security_id(dhan, UNDERLYING_SYMBOL)
+        if not underlying_security_id:
+            console.print(f"[bold red]Could not find security ID for {UNDERLYING_SYMBOL}. Exiting.[/bold red]")
+            logging.critical(f"Could not find security ID for {UNDERLYING_SYMBOL}.")
+            sys.exit(1)
+        console.print(f"Found security ID for {UNDERLYING_SYMBOL}: [bold magenta]{underlying_security_id}[/bold magenta]")
+
+        # 3. Determine nearest weekly expiry (done once at startup)
         # Note: If the script is run over multiple days, this expiry might become outdated.
         # For simplicity, it's fetched once. A more advanced version might re-check periodically.
-        return_arr = get_nearest_weekly_expiry(dhan, UNDERLYING_PREFIX)
+        return_arr = get_nearest_weekly_expiry(dhan, underlying_security_id)
         if not return_arr:
-            console.print(f"[bold red]Could not determine nearest weekly expiry for {UNDERLYING_PREFIX}. Exiting.[/bold red]")
-            logging.critical(f"Could not determine nearest weekly expiry for {UNDERLYING_PREFIX}.")
+            console.print(f"[bold red]Could not determine nearest weekly expiry for {UNDERLYING_SYMBOL}. Exiting.[/bold red]")
+            logging.critical(f"Could not determine nearest weekly expiry for {UNDERLYING_SYMBOL}.")
             sys.exit(1)  # Critical error
         nearest_expiry_date = return_arr['expiry']
-        symbol_prefix = return_arr['symbol_prefix']
         console.print(f"Tracking options for expiry: [bold magenta]{nearest_expiry_date.strftime('%d-%b-%Y')}[/bold magenta]")
 
         console.print(f"Starting live updates. Refresh interval: {REFRESH_INTERVAL_SECONDS} seconds. Press Ctrl+C to exit.")
@@ -564,7 +560,7 @@ def main():
             while True:
                 logging.info("Starting new live update cycle.")
                 # Perform one iteration of analysis
-                display_content = run_analysis_iteration(dhan, nearest_expiry_date, symbol_prefix)
+                display_content = run_analysis_iteration(dhan, underlying_security_id, nearest_expiry_date)
                 # Update the live display with the new tables or error panel
                 live.update(display_content, refresh=True)
                 logging.info(f"Live display updated. Waiting for {REFRESH_INTERVAL_SECONDS} seconds.")
