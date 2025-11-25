@@ -1,0 +1,1 @@
+2025-11-10 08:54:30,913 - WARNING - oi_tracker_rich - Pygame mixer could not be initialized: ALSA: Couldn't open audio device: No such file or directory. Audio alerts will be disabled.

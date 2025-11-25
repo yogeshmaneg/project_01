@@ -2,47 +2,100 @@
 This script tracks the change in Open Interest (OI) for NIFTY 50 options
 and displays it in a live-updating table.
 """
-from kiteconnect import KiteConnect
+from dhanhq import dhanhq
+from dhanhq.marketfeed import DhanFeed
+import asyncio
 import logging
 import datetime
 import pandas as pd
 import time
 import os
 import pygame
+import wave
+import math
+import requests
+import io
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 
 # --- Replace with your actual credentials ---
-api_key = "your_api_key"
-api_secret = "your_api_secret"
-request_token = "your_request_token"
+client_id = "your_client_id"
+access_token = "your_access_token"
+# ---
+
+# Check for placeholder credentials and exit if they are not changed.
+if client_id == "your_client_id" or access_token == "your_access_token":
+    print("="*80)
+    print("!!! ACTION REQUIRED !!!")
+    print("Please edit the 'oi_tracker.py' file and replace the placeholder")
+    print("credentials with your actual DhanHQ Client ID and Access Token.")
+    print("="*80)
+    exit()
+
+# --- Sound Generation ---
+def generate_alert_sound(filename="alert.wav", duration=0.5, frequency=1000):
+    """Generates a simple sine wave and saves it as a WAV file."""
+    if os.path.exists(filename):
+        return
+
+    sample_rate = 44100
+    n_samples = int(duration * sample_rate)
+    amplitude = 16000
+
+    with wave.open(filename, 'w') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+
+        for i in range(n_samples):
+            value = int(amplitude * math.sin(2 * math.pi * frequency * i / sample_rate))
+            wf.writeframes(value.to_bytes(2, byteorder='little', signed=True))
 # ---
 
 # Initialize Pygame Mixer
-pygame.mixer.init()
-
-# Initialize KiteConnect
-kite = KiteConnect(api_key=api_key)
-
-# Generate session
 try:
-    data = kite.generate_session(request_token, api_secret=api_secret)
-    kite.set_access_token(data["access_token"])
-    logging.info("Successfully generated session.")
+    pygame.mixer.init()
+except pygame.error as e:
+    logging.warning(f"Pygame mixer could not be initialized: {e}. Audio alerts will be disabled.")
+    pygame = None
+
+# Generate the alert sound file
+generate_alert_sound()
+
+# Initialize DhanHQ
+dhan = dhanhq(client_id, access_token)
+
+
+# Verify connection
+try:
+    positions = dhan.get_positions()
+    logging.info(f"Successfully connected.")
 except Exception as e:
-    logging.error(f"Session generation failed: {e}")
-    # In a real application, you would handle this by redirecting the user to the login URL
-    # print(f"Login URL: {kite.login_url()}")
-    # For this script, we'll exit if session generation fails
+    logging.error(f"Authentication failed: {e}")
     exit()
 
 # Fetch instruments
 try:
-    instruments = kite.instruments("NFO")
+    # Note: If you encounter an SSL: CERTIFICATE_VERIFY_FAILED error,
+    # it is likely due to an issue with your local Python environment's SSL certificates.
+    # The secure solution is to update your system's certificate store.
+    # For more details, see: https://stackoverflow.com/questions/27835619/urllib-and-ssl-certificate-verify-failed-error
+    url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+    response = requests.get(url)
+    response.raise_for_status()
+    instruments_df = pd.read_csv(io.StringIO(response.text), low_memory=False)
     logging.info("Successfully fetched instruments.")
+except requests.exceptions.SSLError as e:
+    logging.error(f"SSL Certificate Error: {e}")
+    logging.error("This is likely an issue with your local environment's SSL certificates.")
+    logging.error("Please see the note in the script's source code for more information.")
+    exit()
+except requests.exceptions.RequestException as e:
+    logging.error(f"Failed to download instruments file: {e}")
+    exit()
 except Exception as e:
-    logging.error(f"Failed to fetch instruments: {e}")
+    logging.error(f"Failed to process instruments file: {e}")
     exit()
 
 # --- Configuration ---
@@ -54,11 +107,30 @@ strike_interval = 50
 def get_atm_strike():
     """Fetches the LTP of the underlying instrument and determines the ATM strike."""
     try:
-        ltp_data = kite.ltp(f"{underlying_exchange}:{underlying_instrument}")
-        ltp = ltp_data[f"{underlying_exchange}:{underlying_instrument}"]["last_price"]
-        atm_strike = round(ltp / strike_interval) * strike_interval
-        logging.info(f"LTP for {underlying_instrument}: {ltp}, ATM Strike: {atm_strike}")
-        return atm_strike
+        nifty_instrument = instruments_df[
+            (instruments_df['SM_SYMBOL_NAME'] == 'NIFTY') &
+            (instruments_df['SEM_INSTRUMENT_NAME'] == 'INDEX')
+        ]
+        if nifty_instrument.empty:
+            logging.error("NIFTY 50 instrument not found.")
+            return None
+
+        nifty_security_id = str(nifty_instrument.iloc[0]['SEM_SMST_SECURITY_ID'])
+
+        # Using the REST API for fetching LTP
+        securities = {"IDX_I": [nifty_security_id]}
+        ltp_data = dhan.ticker_data(securities)
+
+        if ltp_data and ltp_data['status'] == 'success':
+            data = ltp_data['data']
+            if 'IDX_I' in data and data['IDX_I']:
+                ltp = data['IDX_I'][0]['last_price']
+                atm_strike = round(ltp / strike_interval) * strike_interval
+                logging.info(f"LTP for {underlying_instrument}: {ltp}, ATM Strike: {atm_strike}")
+                return atm_strike
+
+        logging.error(f"Failed to get LTP. Response: {ltp_data}")
+        return None
     except Exception as e:
         logging.error(f"Failed to get LTP and determine ATM strike: {e}")
         return None
@@ -70,17 +142,19 @@ if not atm_strike:
 
 def get_option_contracts(atm_strike, num_strikes=2):
     """
-    Finds the instrument tokens for the ATM, ITM, and OTM options for the nearest expiry.
+    Finds the security IDs for the ATM, ITM, and OTM options for the nearest expiry.
     """
-    nifty_options = [
-        ins for ins in instruments
-        if ins["name"] == "NIFTY" and ins["segment"] == "NFO-OPT"
-    ]
+    nifty_options = instruments_df[
+        (instruments_df['SEM_INSTRUMENT_NAME'] == 'OPTIDX') &
+        (instruments_df['SM_SYMBOL_NAME'] == 'NIFTY')
+    ].copy()
+
+    nifty_options['SEM_EXPIRY_DATE'] = pd.to_datetime(nifty_options['SEM_EXPIRY_DATE'])
 
     # Find the nearest expiry date
-    expiries = sorted(list(set(ins["expiry"] for ins in nifty_options)))
+    expiries = sorted(nifty_options['SEM_EXPIRY_DATE'].unique())
     nearest_expiry = expiries[0]
-    logging.info(f"Nearest expiry date: {nearest_expiry}")
+    logging.info(f"Nearest expiry date: {nearest_expiry.date()}")
 
     # Select the strikes
     strikes = [atm_strike + i * strike_interval for i in range(-num_strikes, num_strikes + 1)]
@@ -88,13 +162,17 @@ def get_option_contracts(atm_strike, num_strikes=2):
     selected_contracts = {"calls": {}, "puts": {}}
     for strike in strikes:
         for opt_type in ["CE", "PE"]:
-            contract_name = f"NIFTY{nearest_expiry.strftime('%y%b').upper()}{strike}{opt_type}"
-            contract = next((ins for ins in nifty_options if ins["tradingsymbol"].startswith(f"NIFTY") and ins["strike"] == strike and ins["instrument_type"] == opt_type and ins["expiry"] == nearest_expiry), None)
-            if contract:
+            contract = nifty_options[
+                (nifty_options['SEM_STRIKE_PRICE'] == strike) &
+                (nifty_options['SEM_OPTION_TYPE'] == opt_type) &
+                (nifty_options['SEM_EXPIRY_DATE'] == nearest_expiry)
+            ]
+            if not contract.empty:
+                security_id = str(contract.iloc[0]['SEM_SMST_SECURITY_ID'])
                 if opt_type == "CE":
-                    selected_contracts["calls"][strike] = contract["instrument_token"]
+                    selected_contracts["calls"][strike] = security_id
                 else:
-                    selected_contracts["puts"][strike] = contract["instrument_token"]
+                    selected_contracts["puts"][strike] = security_id
 
     return selected_contracts
 
@@ -107,16 +185,33 @@ if not option_contracts["calls"] or not option_contracts["puts"]:
 logging.info(f"Selected call contracts: {option_contracts['calls']}")
 logging.info(f"Selected put contracts: {option_contracts['puts']}")
 
-def get_historical_oi(instrument_token, interval='minute', lookback_period=30):
-    """Fetches historical OI data for a given instrument token."""
+def get_historical_oi(security_id, interval='1', lookback_period=30):
+    """Fetches historical OI data for a given security ID."""
     to_date = datetime.datetime.now()
     from_date = to_date - datetime.timedelta(minutes=lookback_period)
 
     try:
-        data = kite.historical_data(instrument_token, from_date, to_date, interval, oi=True)
-        return pd.DataFrame(data)
+        data = dhan.intraday_daily_data(
+            security_id=security_id,
+            exchange_segment='NSE_FNO',
+            instrument_type='OPTIDX',
+            interval=interval,
+            from_date=from_date.strftime('%Y-%m-%d'),
+            to_date=to_date.strftime('%Y-%m-%d')
+        )
+
+        if data['status'] == 'success':
+            df = pd.DataFrame({
+                'date': pd.to_datetime(data['data']['timestamp'], unit='s'),
+                'oi': data['data']['open_interest']
+            })
+            return df
+        else:
+            logging.error(f"Failed to fetch historical data for {security_id}: {data['errorMessage']}")
+            return pd.DataFrame()
+
     except Exception as e:
-        logging.error(f"Failed to fetch historical data for {instrument_token}: {e}")
+        logging.error(f"Failed to fetch historical data for {security_id}: {e}")
         return pd.DataFrame()
 
 def create_oi_tables():
@@ -173,12 +268,13 @@ def update_oi_tables():
             put_oi_table.loc[strike, "30 mins"] = calculate_oi_change(hist_data, 30)
 
 def play_alert_sound():
-    """Plays an alert sound. A valid 'alert.wav' file is required."""
-    try:
-        pygame.mixer.music.load("alert.wav")
-        pygame.mixer.music.play()
-    except Exception as e:
-        logging.warning(f"Could not play alert sound: {e}. Make sure 'alert.wav' is a valid sound file.")
+    """Plays an alert sound if pygame is available."""
+    if pygame:
+        try:
+            pygame.mixer.music.load("alert.wav")
+            pygame.mixer.music.play()
+        except Exception as e:
+            logging.warning(f"Could not play alert sound: {e}. Make sure 'alert.wav' is a valid sound file.")
 
 def check_and_play_alert(call_table, put_table):
     """Checks if more than 50% of the cells are color-coded and plays an alert."""
