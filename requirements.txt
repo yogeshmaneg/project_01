@@ -1,0 +1,6 @@
+dhanhq
+pandas
+pandas-ta
+openpyxl
+requests
+scipy
