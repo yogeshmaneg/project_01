@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+backtest_results.xlsx
+backtest_results.csv
