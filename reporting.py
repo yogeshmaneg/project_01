@@ -50,6 +50,10 @@ def generate_report(trades, output_filename="backtest_report.xlsx"):
     df_trades['exit_date'] = df_trades['exit_time'].dt.date
     daily_pnl = df_trades.groupby('exit_date')['pnl'].sum().reset_index()
 
+    # --- FIX: Remove timezone info before writing to Excel ---
+    df_trades['entry_time'] = df_trades['entry_time'].dt.tz_localize(None)
+    df_trades['exit_time'] = df_trades['exit_time'].dt.tz_localize(None)
+
     # --- Export to Excel ---
     with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
         df_summary.to_excel(writer, sheet_name='Performance Summary', index=False)
@@ -67,7 +71,7 @@ if __name__ == '__main__':
     import config
 
     nifty_50 = config.INDICES["NIFTY_50"]
-    sample_trades = run_backtest(nifty_50, 5, None, None, use_dummy_data=True)
+    sample_trades, _ = run_backtest(nifty_50, 5, None, None, use_dummy_data=True)
 
     if sample_trades:
         generate_report(sample_trades)
