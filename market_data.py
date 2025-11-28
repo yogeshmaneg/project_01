@@ -22,7 +22,7 @@ def get_historical_data(instrument, timeframe, from_date_str, to_date_str):
         from_date = datetime.strptime(from_date_str, "%Y-%m-%d")
         to_date = datetime.strptime(to_date_str, "%Y-%m-%d")
 
-        all_data = []
+        all_data_chunks = []
 
         current_from_date = from_date
         while current_from_date < to_date:
@@ -31,9 +31,6 @@ def get_historical_data(instrument, timeframe, from_date_str, to_date_str):
             print(f"Fetching data from {current_from_date.strftime('%Y-%m-%d')} to {current_to_date.strftime('%Y-%m-%d')} for {timeframe}min timeframe")
 
             instrument_type = "INDEX"
-
-            # Correction: The exchange segment for indices is 'IDX_I'
-            # Correction: The interval parameter should be an integer.
             exchange_segment = 'IDX_I'
 
             data = dhan.intraday_minute_data(
@@ -46,7 +43,9 @@ def get_historical_data(instrument, timeframe, from_date_str, to_date_str):
             )
 
             if data and data.get('status') == 'success' and 'data' in data and data['data']:
-                 all_data.extend(data['data'])
+                 # The API returns a dictionary of lists. Convert it to a DataFrame directly.
+                 chunk_df = pd.DataFrame(data['data'])
+                 all_data_chunks.append(chunk_df)
             elif data:
                 if not (data.get('status') == 'success' and 'data' in data and not data['data']):
                     print(f"API Error for {instrument['security_id']}: {data.get('remarks', 'No remarks')}")
@@ -55,12 +54,15 @@ def get_historical_data(instrument, timeframe, from_date_str, to_date_str):
 
             current_from_date += timedelta(days=90)
 
-        if not all_data:
+        if not all_data_chunks:
             print("No data fetched.")
             return pd.DataFrame()
 
-        df = pd.DataFrame(all_data)
-        df['datetime'] = pd.to_datetime(df['start_Time'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
+        # Concatenate all the chunk DataFrames
+        df = pd.concat(all_data_chunks, ignore_index=True)
+
+        # Correction: The correct key for the timestamp is 'timestamp'.
+        df['datetime'] = pd.to_datetime(df['timestamp'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
         df.set_index('datetime', inplace=True)
         df = df[['open', 'high', 'low', 'close', 'volume']]
 
