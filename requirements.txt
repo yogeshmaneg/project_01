@@ -1,0 +1,5 @@
+dhanhq
+pandas
+pandas-ta
+openpyxl
+matplotlib

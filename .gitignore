@@ -1,0 +1,18 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment folders
+.venv/
+venv/
+env/
+
+# IDE files
+.idea/
+.vscode/
+
+# Output files
+*.xlsx
+*.png
