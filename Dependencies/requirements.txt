@@ -1,0 +1,10 @@
+dhanhq
+pandas
+xlwings
+requests
+pdbpp
+pprintpp
+numpy
+mibian
+playsound==1.2.2
+rich
