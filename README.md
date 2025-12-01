@@ -21,6 +21,20 @@ This script tracks the change in Open Interest (OI) for ATM, 2 ITM, and 2 OTM op
     -   Fill in your `client_code` and `token_id` from your Dhan account.
     -   (Optional) Customize the `underlying` instrument and `expiry` date.
 
+    **Example `config.json`:**
+    ```json
+    {
+        "client_code": "YOUR_CLIENT_CODE",
+        "token_id": "YOUR_TOKEN_ID",
+        "underlying": "NIFTY",
+        "expiry": "28-11-2024"
+    }
+    ```
+
+    **Important:** Make sure your `config.json` file is a valid JSON. Common mistakes include:
+    -   Trailing commas after the last item in a list or object.
+    -   Using single quotes (`'`) instead of double quotes (`"`).
+
 ## Usage
 
 Run the script from your terminal:

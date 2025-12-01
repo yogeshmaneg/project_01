@@ -181,6 +181,10 @@ def main():
 
     except FileNotFoundError:
         console.print("[bold red]Error: config.json not found. Please create it from config.example.json.[/bold red]")
+    except json.JSONDecodeError as e:
+        console.print(f"[bold red]Error: Could not parse config.json. Please check for syntax errors.[/bold red]")
+        console.print(f"[bold red]Details: {e}[/bold red]")
+        console.print(f"[yellow]Common mistakes include trailing commas or using single quotes instead of double quotes.[/yellow]")
     except KeyError as e:
         console.print(f"[bold red]Error: Missing key in config.json: {e}[/bold red]")
     except KeyboardInterrupt:
