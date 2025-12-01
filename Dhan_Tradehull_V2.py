@@ -1038,7 +1038,7 @@ class Tradehull:
 			exchange_segment = script_exchange[exchange]
 			security_id = instrument_df[((instrument_df['SEM_TRADING_SYMBOL'] == name) | (instrument_df['SEM_CUSTOM_SYMBOL'] == name)) & (instrument_df['SEM_EXM_EXCH_ID'] == instrument_exchange[exchange])].iloc[-1]['SEM_SMST_SECURITY_ID']
 
-			response = self.Dhan.get_quote(str(security_id), exchange_segment)
+			response = self.Dhan.quote(str(security_id), exchange_segment)
 			if response['status'] == 'success':
 				return response['data']['oi']
 			else:
