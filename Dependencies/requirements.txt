@@ -1,0 +1,5 @@
+dhanhq
+pandas
+numpy
+playsound==1.2.2
+rich

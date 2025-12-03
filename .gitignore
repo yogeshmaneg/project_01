@@ -1,0 +1,9 @@
+# Ignore sensitive configuration files
+config.json
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore dependency directories
+Dependencies/
